@@ -108,7 +108,7 @@ def isValidTagging(sequence):
 def chunks(tags):   # TODO: option: does O count as a singleton chunk?
     '''
     >>> list(chunks(['O', 'B-evt', 'o', 'b-PER', 'I', 'I', 'B-PER', 'O', 'B-ORG', 'I-ORG'])) \
-        #        0    1        2    3        4    5    6        7    8        9
+        #             0    1        2    3        4    5    6        7    8        9
     [(3,), (1, 4, 5), (6,), (8, 9)]
     '''
     ochk = []
@@ -394,6 +394,10 @@ def best_script(in_tags, out_tags):
     c. Don't consider edits that are identical to a previous edit in the script.
     d. With WIDEN/NARROW, don't consider edits that reverse a previous edit in the script: 
        e.g., WIDEN1RIGHT @ 5, and later NARROW1RIGHT @ 6 (or vice versa).
+    
+    TODO: Maybe edits can be constrained to an ordering respecting
+       {DELETE} → {WIDEN} → {SPLIT, MERGE, RELABEL} → {NARROW} → {INSERT}
+    without ever adversely affecting the best derivation?
     
     >>> best_script( \
     ['O',     'B-evt', 'o', 'b-PER', 'I-evt', 'I-evt', 'B-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'O',     'O',     'O'], \
