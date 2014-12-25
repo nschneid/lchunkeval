@@ -396,8 +396,28 @@ def best_script(in_tags, out_tags):
        e.g., WIDEN1RIGHT @ 5, and later NARROW1RIGHT @ 6 (or vice versa).
     
     TODO: Maybe edits can be constrained to an ordering respecting
-       {DELETE} → {WIDEN} → {SPLIT, MERGE, RELABEL} → {NARROW} → {INSERT}
-    without ever adversely affecting the best derivation?
+       {DELETE}* → {WIDEN, NARROW}* → {SPLIT, MERGE, RELABEL}* → {NARROW at any SPLIT points}* → {INSERT}*
+    or
+       {DELETE}* → {WIDEN, NARROW}* → {SPLIT, RELABEL}* → {MERGE, RELABEL}* → {NARROW at any SPLIT points}* → {INSERT}*
+    without ever adversely affecting the preferred derivation?
+    
+    Rationale for NARROW < WIDEN: B-PER I-PER B-LOC → B-PER B-LOC I-LOC
+    
+    Rationale for WIDEN < MERGE: B-PER O B-PER → B-PER I-PER I-PER
+    Rationale for SPLIT < NARROW: B-PER I-PER I-PER → B-PER O B-PER
+    
+    Rationale for RELABEL < SPLIT: B-PER I-PER I-PER → B-LOC B-LOC I-LOC
+    Rationale for MERGE < RELABEL: B-LOC B-LOC I-LOC → B-PER I-PER I-PER
+    
+    Rationale for RELABEL < MERGE: B-PER B-LOC I-LOC → B-PER I-PER I-PER
+    Rationale for SPLIT < RELABEL: B-PER I-PER I-PER → B-PER B-LOC I-LOC
+    
+    Rationale for SPLIT < {MERGE,RELABEL}: B-PER B-PER I-PER I-PER → B-PER I-PER I-PER B-LOC without causing everything to align to everything
+    Rationale for {SPLIT,RELABEL} < MERGE: B-PER I-PER I-PER B-LOC → B-PER B-PER I-PER I-PER without causing everything to align to everything
+    
+    Rationale for MERGE < RELABEL < SPLIT: B-PER B-PER I-PER B-PER → B-LOC I-LOC B-LOC I-LOC 
+        (MRG > MRG > REL > SPL; everything will be aligned to everything. Alternative 
+         SPL > MRG > MRG > REL > REL gives better alignments but costs more)
     
     >>> best_script( \
     ['O',     'B-evt', 'o', 'b-PER', 'I-evt', 'I-evt', 'B-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'O',     'O',     'O'], \
