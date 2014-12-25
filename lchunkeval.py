@@ -504,6 +504,38 @@ def best_script(in_tags, out_tags):
             
     return best_script_cost, best_script[1:]    # don't include the initial state in the returned script
 
+def format_script(in_tags, script, tot_cost):
+    firstline = ' '*42 + ' '.join('{:6}'.format(tag) for tag in in_tags) + '\n'
+    return firstline + '\n'.join('  {op:12} {args:26} {result}'.format(op=edit[0], 
+        args=edit[1:], result=' '.join('{:6}'.format(tag) for tag in result)) for edit,result in script)+'\n___\n{}'.format(tot_cost)
+
+def Fscore(prec, rec):
+    if prec==0.0 or rec==0.0: return float('nan')
+    return 2*prec*rec/(prec+rec)
+
+def score(gold_tags, pred_tags):
+    assert len(gold_tags)==len(pred_tags)
+    cost, script = best_script(pred_tags, gold_tags)
+    print('Pred -> Gold edit script:')
+    print(format_script(pred_tags, script,cost))
+    print()
+    pcost, pscript = best_script(pred_tags, ['O']*len(gold_tags))
+    rcost, rscript = best_script(['O']*len(pred_tags), gold_tags)
+    print('DELETE all pred, INSERT all gold edit script:')
+    print(format_script(pred_tags,pscript+rscript,pcost+rcost))
+    print()
+    
+    print('cost =',cost)
+    print('DELETE all pred cost =',pcost)
+    print('INSERT all gold cost =',rcost)
+    overall_score = 1 - cost/(pcost+rcost)
+    print('Score = 1 - {}/{} = {}'.format(cost,(pcost+rcost),overall_score))
+    #f = Fscore(cost/pdenom, cost/rdenom)
+    #print('recall denom =',rdenom)
+    #print('precision denom =',pdenom)
+    #print('P = ',cost/pdenom, 'R = ',cost/rdenom, 'F = ',f)
+    return overall_score
+
 def load(goldAndPredF):
     data = []
     
@@ -536,9 +568,17 @@ def load(goldAndPredF):
 def main():
     data = load(sys.stdin)
     for gg,pp in data:
-        best_script(tuple(pp), tuple(gg))
+        best_script(tuple(gg), tuple(pp))
 
 if __name__=='__main__':
     # running all the doctests takes 10s on my machine
     import doctest
     doctest.testmod(optionflags=doctest.NORMALIZE_WHITESPACE)
+    print('BASE COSTS: INS={} | DEL={} | WID={} | NAR={} | SPL={} | MRG={} | REL={}'.format(C_INS,C_DEL,C_WID,C_NAR,C_SPL,C_MRG,C_REL))
+    print()
+    print('EXAMPLE:')
+    pp = ['O',     'B-evt', 'O',     'B-PER', 'B-evt', 'I-evt', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER']
+    gg = ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O',     'B-PER', 'I-PER', 'B-ORG', 'I-ORG', 'I-ORG']
+    print('Pred:', pp)
+    print('Gold:', gg)
+    score(gg, pp)
