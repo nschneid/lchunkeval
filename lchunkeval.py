@@ -561,20 +561,38 @@ def best_script(in_tags, out_tags):
             #boundaryMatchLabelMismatchChunks = sum(1 for chk in (set(chunks(result)) & set(chunks(out_tags))) if label(result[chk[0]])!=label(out_tags[chk[0]]))
             #heuristic = boundaryMatchLabelMismatchChunks+.5*boundaryMismatchChunks
             
+            '''
+            A* heuristic:
+            The following is *almost* a lower bound on the edit cost: 
+            
+               number of target chunks that are not exactly matched in the source
+                                               +
+               number of source chunks that do not overlap with any target chunks
+               
+            This also applies to the reverse of source/target, so we take the max of the 
+            two directions for a tighter bound.
+            
+            However, this is not *quite* a lower bound because of SPLIT/MERGE: 
+            e.g. B-LOC I-LOC → B-LOC B-LOC has 2 unmatched chunks on target side but 
+            only 1.0 cost is incurred with the MERGE operation. To account for this, 
+            we subtract the number of Begin tags immediately following a chunk with 
+            the same label (which could be MERGEd without additional edits). 
+            This makes the heuristic admissible.
+
+            (We do not have to correct the other, "O"-matching, term because B-LOC B-LOC → O O 
+            is required to be two DELETEs, not a MERGE followed by a DELETE.)            
+            '''
             heuristic = max(unmatchedTgtChunks - adjacentTgtChunksSameLabel + oMatchedSrcChunks, 
                             unmatchedSrcChunks - adjacentSrcChunksSameLabel + oMatchedTgtChunks)
-            # Almost a lower bound on the edit cost: number of chunks on the target side that are not 
-            # exactly matched on the source side, plus the number of chunks on the source side that 
-            # do not overlap with any chunks on the target side. Also the reverse of source/target. 
-            # "Almost" because of SPLIT/MERGE: e.g. B-LOC I-LOC → B-LOC B-LOC, 
-            # so there are 2 unmatched chunks on target side but only 1 cost is incurred 
-            # with the merge operation. To account for this, we subtract the number of 
-            # Begin tags immediately following a chunk with the same label (which could be 
-            # MERGEd without additional edits).
-            # (We'd also have to correct the other, "O"-matching, term--except e.g. B-LOC B-LOC → O O 
-            # is required to be two DELETEs, not a MERGE followed by a DELETE.)
             
+            '''
+            Tiebreaker heuristic: total number of source/target chunks not exactly matched 
+            on the other side. Lower is better. The intuition is that it rewards partial 
+            derivations that haved "locked in" more fully correct chunks. 
             
+            (This would not be admissible as an A* heuristic; it is only used when 
+            the A* estimate has multiple best scoring candidates.)
+            '''
             nUnmatched = (unmatchedSrcChunks+unmatchedTgtChunks)
             #heapq.heappush(q, ((cost+editcost+heuristic,cost+editcost), script[:]+[(edit,result)]))
             
