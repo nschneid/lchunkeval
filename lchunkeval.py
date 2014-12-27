@@ -436,7 +436,13 @@ def best_script(in_tags, out_tags):
     that are way earlier in the sequence than the previous edit. (Specifically, 
     the first token position in the edit should not be more than 2 tokens to the left of 
     the first token position in the previous edit in the script. TODO: be more specific.
-    See `prevEditI` in the code.)
+    See `prevEditI` in the code.) This allows some leeway to allow for edits facilitated 
+    by an edit to their right:
+    
+    >>> best_script(['O', 'O', 'O', 'B-PER'], ['B-PER', 'I-PER', 'I-PER', 'I-PER'])
+    (3.0, [(('WIDEN1LEFT', 3, 'PER'), ['O', 'O', 'B-PER', 'I-PER']), 
+    (('WIDEN1LEFT', 2, 'PER'), ['O', 'B-PER', 'I-PER', 'I-PER']), 
+    (('WIDEN1LEFT', 1, 'PER'), ['B-PER', 'I-PER', 'I-PER', 'I-PER'])])
     
     We also avoid searching over redundant edits:
      - Edits that are identical to a previous edit in the script are not considered.
