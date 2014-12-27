@@ -146,19 +146,40 @@ C_NAR = C_WID = 1
 
 def legal_edits(script, out_tags):
     '''
-    RELABEL: B-PER (I-PER)* ↔ B-ORG (I-ORG)*
+    A generator over edit moves given a script (including the source sequence) 
+    and the target sequence. Produces 3-tuples of of the form (edit, result, cost). 
+    Each edit is represented as a tuple containing: 
+    the name of the operation (see below); the offset(s) indicating
+    where in the sequence it applies; and the label(s) of the chunks to which it applies. 
+    
+    
+    Synposis of Edit Operations
+    ===========================
+    
+    - RELABEL changes the label of a single chunk: B-PER (I-PER)* ↔ B-ORG (I-ORG)*
       on the condition that at least one of the tokens in the chunk is labeled with ORG in the output
-    INSERT(DELETE): O (O)* → B-PER (I-PER)*
-      INSERT on the condition that the inserted chunk is in the output
-    SPLIT(MERGE): B-PER I-PER → B-PER B-PER; I-PER I-PER → I-PER B-PER
-    NARROW1LEFT(WIDEN1LEFT): B-PER I-PER → O B-PER
-    NARROW1RIGHT: B|I-PER I-PER ] → O  (where "]" means "followed by a non-I tag or the end of the sequence")
-    WIDEN1RIGHT: B-PER O → B-PER I-PER; I-PER O → I-PER I-PER
+    - INSERT(DELETE) applies to a single chunk: O (O)* → B-PER (I-PER)*
+      on the condition that the DELETEd chunk is present in the source, and the INSERTed 
+      chunk is present in the target
+    - SPLIT(MERGE) separates into (combines from) 2 adjacent chunks: 
+      B-PER I-PER → B-PER B-PER; I-PER I-PER → I-PER B-PER
+    - NARROW1LEFT(WIDEN1LEFT) shifts the left boundary of a chunk: B-PER I-PER → O B-PER
+    - NARROW1RIGHT: B|I-PER I-PER ] → O  (where "]" means "followed by a non-I tag or the end of the sequence")
+    - WIDEN1RIGHT: B-PER O → B-PER I-PER; I-PER O → I-PER I-PER
     
     The above rules also work with gappy expressions, so long as a rule application 
-    does not affect tags both inside and outside of a gap.
+    does not affect tags both inside and outside of a gap. 
+    They are associated with constant costs: `C_REL`, `C_INS`, `C_DEL`, `C_SPL`, `C_MRG`, 
+    `C_NAR`, and `C_WID`.
     
-    #(INSERT-GAP, DELETE-GAP, WIDEN-GAP-{LEFT,RIGHT}, NARROW-GAP-{LEFT,RIGHT}, STRENGTHEN, WEAKEN)
+    TODO: Consider adding INSERT-GAP, DELETE-GAP, WIDEN-GAP-{LEFT,RIGHT}, 
+    NARROW-GAP-{LEFT,RIGHT}; STRENGTHEN, WEAKEN
+    
+    See best_script() documentation for constraints on the application of these edits.
+    
+    
+    Test Cases
+    ==========
     
     >>> LABELS |= set(['PER', 'ORG', 'LOC', 'evt'])
     >>> list(legal_edits([(None, ['O'])], ['O']))
@@ -179,7 +200,8 @@ def legal_edits(script, out_tags):
      (('WIDEN1LEFT', 1, 'PER'), ['B-PER', 'I-PER', 'o', 'I-PER'], 1)]
     >>> sorted(legal_edits([(None, ['O', 'B-PER', 'o', 'I-PER'])], ['O', 'B-evt', 'b-ORG', 'I-evt']))
     [(('DELETE', (1, 3), 'PER'), ['O', 'O', 'O', 'O'], 2), 
-     (('INSERT', (2,), 'ORG'), ['O', 'B-PER', 'b-ORG', 'I-PER'], 2),
+     (('INSERT', (2,), 'ORG'), ['O', 'B-PER', 'b-ORG', 'I-PER'], 2), 
+     (('RELABEL', (1, 3), 'PER', 'evt'), ['O', 'B-evt', 'o', 'I-evt'], 1), 
      (('WIDEN1LEFT', 1, 'PER'), ['B-PER', 'I-PER', 'o', 'I-PER'], 1)]
     >>> sorted(legal_edits([(None, ['O', 'B-PER', 'b-LOC', 'I-PER'])], ['O', 'B-evt', 'b-ORG', 'I-evt']))
     [(('DELETE', (1, 3), 'PER'), ['O', 'O', 'B-LOC', 'O'], 2), 
@@ -217,13 +239,16 @@ def legal_edits(script, out_tags):
     '''
     from_tags = script[-1][1]
     prevStructEdits = [e[:2] for e,r in script[1:]]
+    prevEditOps = [e[0].replace('1LEFT','').replace('1RIGHT','') for e in prevStructEdits]
+    prevEditOps = [op for k,op in enumerate(prevEditOps) if k==0 or prevEditOps[k-1]!=op]   # remove adjacent duplicates
+    # {DELETE}* → {NARROW}* → {WIDEN}* → {SPLIT, RELABEL}* → {MERGE, RELABEL}* → {NARROW at any SPLIT points}* → {INSERT}*
     
     for chk in chunks(from_tags):
         curlbl = lbl(from_tags[chk[0]]) # TODO: what if labels are optional?
         
         # RELABEL
-        if set(chunks(from_tags))==set(chunks(out_tags)): # only consider relabeling after structure is right
-        #if True:
+        #if set(chunks(from_tags))==set(chunks(out_tags)): # only consider relabeling after structure is right
+        if 'INSERT' not in prevEditOps and not (len(prevEditOps)>=2 and prevEditOps[-1]=='NARROW' and 'SPLIT' in prevEditOps):
             for newlbl in LABELS:
                 if newlbl!=curlbl and any(label(out_tags[i])==newlbl for i in chk):
                     result = from_tags[:]
@@ -232,15 +257,16 @@ def legal_edits(script, out_tags):
                     yield ('RELABEL', chk, curlbl, newlbl), result, C_REL
                 
         # DELETE
-        result = from_tags[:]
-        prevI = None
-        for i in chk:
-            if prevI is not None and prevI+1<i: # we are after a gap
-                for j in range(prevI+1,i):
-                    result[j] = toOutOfGap(result[j])
-            result[i] = toOutside(result[i])     # TODO: what if the chunk has a gap? need to uppercase the contents
-            prevI = i
-        yield ('DELETE', chk, curlbl), result, C_DEL
+        if not prevEditOps or prevEditOps[0]=='DELETE': # any DELETEs must come first
+            result = from_tags[:]
+            prevI = None
+            for i in chk:
+                if prevI is not None and prevI+1<i: # we are after a gap
+                    for j in range(prevI+1,i):
+                        result[j] = toOutOfGap(result[j])
+                result[i] = toOutside(result[i])     # TODO: what if the chunk has a gap? need to uppercase the contents
+                prevI = i
+            yield ('DELETE', chk, curlbl), result, C_DEL
         
     # INSERT
     for chk in chunks(out_tags):    # only consider inserting chunks that are in the output
@@ -257,48 +283,55 @@ def legal_edits(script, out_tags):
                 prevI = i
             yield ('INSERT', chk, newlbl), result, C_INS
             
-    for (i,a),b in zip(enumerate(from_tags[:-1]),from_tags[1:]):
-        if isInGap(a)!=isInGap(b): continue # there will be separate operations to change gaps
-        elif isOutside(a) and isBegin(b): # WIDEN1LEFT
-            if ('WIDEN1LEFT', i+1) not in prevStructEdits and ('NARROW1LEFT', i) not in prevStructEdits:
-                #and not isOutside(out_tags[i]):  # expediency
-                result = from_tags[:]
-                result[i] = result[i+1]
-                result[i+1] = toInside(result[i+1])
-                yield ('WIDEN1LEFT', i+1, lbl(b)), result, C_WID
-        elif not isOutside(a) and isOutside(b): # WIDEN1RIGHT
-            if ('WIDEN1RIGHT', i) not in prevStructEdits and ('NARROW1RIGHT', i+1) not in prevStructEdits:
-                #and not isOutside(out_tags[i+1]):    # expediency
-                result = from_tags[:]
-                result[i+1] = toInside(result[i])
-                yield ('WIDEN1RIGHT', i, lbl(a)), result, C_WID
-        elif not isOutside(a) and not isOutside(b) and lbl(a)==lbl(b):  # SPLIT/MERGE/NARROW
-            if isBegin(b): # different chunks--MERGE
-                if isInGap(out_tags[i])==isInGap(out_tags[i+1]) and isInside(out_tags[i+1]):   # expediency constraint (opp. of SPLIT)
-                    result = from_tags[:]
-                    result[i+1] = toInside(result[i+1])
-                    yield ('MERGE', i+1, lbl(a)), result, C_MRG
-            else:   # same chunk
-                # SPLIT
-                if not (isOutside(out_tags[i]) and isOutside(out_tags[i+1])) \
-                   and not (isInGap(out_tags[i])==isInGap(out_tags[i+1]) and isInside(out_tags[i+1])): # expediency constraint: split parts must belong to different chunks of the output (at most one may belong to no chunk)
-                    result = from_tags[:]
-                    result[i+1] = toBegin(result[i+1])
-                    thecost = C_SPL
-                    yield ('SPLIT', i+1, lbl(a)), result, thecost
-                # NARROW
-                if i+2==len(from_tags) or not (isInside(from_tags[i+2]) or isInGap(from_tags[i+2])):    # need to make sure 'b' is not in the middle of a chunk
-                    # (it doesn't matter what 'a' is so long as it's not the last token in a gap)
-                    if ('NARROW1RIGHT', i+1) not in prevStructEdits and ('WIDEN1RIGHT', i) not in prevStructEdits:
+    # NARROW, WIDEN, SPLIT, MERGE
+    if len(prevEditOps)<1 or prevEditOps[-1]!='INSERT':
+        for (i,a),b in zip(enumerate(from_tags[:-1]),from_tags[1:]):
+            if isInGap(a)!=isInGap(b): continue # there will be separate operations to change gaps
+            elif isOutside(a) and isBegin(b): # WIDEN1LEFT
+                if set(prevEditOps) <= {'DELETE','NARROW','WIDEN'}:
+                    if ('WIDEN1LEFT', i+1) not in prevStructEdits and ('NARROW1LEFT', i) not in prevStructEdits:
+                        #and not isOutside(out_tags[i]):  # expediency
                         result = from_tags[:]
-                        result[i+1] = toOutside(result[i+1])
-                        yield ('NARROW1RIGHT', i+1, lbl(a)), result, C_NAR
-                if isBegin(a):
-                    if ('NARROW1LEFT', i) not in prevStructEdits and ('WIDEN1LEFT', i+1) not in prevStructEdits:
+                        result[i] = result[i+1]
+                        result[i+1] = toInside(result[i+1])
+                        yield ('WIDEN1LEFT', i+1, lbl(b)), result, C_WID
+            elif not isOutside(a) and isOutside(b): # WIDEN1RIGHT
+                if set(prevEditOps) <= {'DELETE','NARROW','WIDEN'}:
+                    if ('WIDEN1RIGHT', i) not in prevStructEdits and ('NARROW1RIGHT', i+1) not in prevStructEdits:
+                        #and not isOutside(out_tags[i+1]):    # expediency
                         result = from_tags[:]
-                        result[i] = toOutside(result[i])
-                        result[i+1] = toBegin(result[i+1])
-                        yield ('NARROW1LEFT', i, lbl(a)), result, C_NAR
+                        result[i+1] = toInside(result[i])
+                        yield ('WIDEN1RIGHT', i, lbl(a)), result, C_WID
+            elif not isOutside(a) and not isOutside(b) and lbl(a)==lbl(b):  # SPLIT/MERGE/NARROW
+                if isBegin(b): # different chunks--MERGE
+                    if not (len(prevEditOps)>=2 and prevEditOps[-1]=='NARROW' and 'SPLIT' in prevEditOps):
+                        if isInGap(out_tags[i])==isInGap(out_tags[i+1]) and isInside(out_tags[i+1]):   # expediency constraint (opp. of SPLIT)
+                            result = from_tags[:]
+                            result[i+1] = toInside(result[i+1])
+                            yield ('MERGE', i+1, lbl(a)), result, C_MRG
+                else:   # same chunk
+                    # SPLIT
+                    if 'MERGE' not in prevEditOps and not (len(prevEditOps)>=2 and prevEditOps[-1]=='NARROW' and 'SPLIT' in prevEditOps):
+                        if not (isOutside(out_tags[i]) and isOutside(out_tags[i+1])) \
+                           and not (isInGap(out_tags[i])==isInGap(out_tags[i+1]) and isInside(out_tags[i+1])): # expediency constraint: split parts must belong to different chunks of the output (at most one may belong to no chunk)
+                            result = from_tags[:]
+                            result[i+1] = toBegin(result[i+1])
+                            thecost = C_SPL
+                            yield ('SPLIT', i+1, lbl(a)), result, thecost
+                    # NARROW
+                    if not ({'MERGE','WIDEN','RELABEL'} & set(prevEditOps) and 'SPLIT' not in prevEditOps):
+                        if i+2==len(from_tags) or not (isInside(from_tags[i+2]) or isInGap(from_tags[i+2])):    # need to make sure 'b' is not in the middle of a chunk
+                            # (it doesn't matter what 'a' is so long as it's not the last token in a gap)
+                            if ('NARROW1RIGHT', i+1) not in prevStructEdits and ('WIDEN1RIGHT', i) not in prevStructEdits:
+                                result = from_tags[:]
+                                result[i+1] = toOutside(result[i+1])
+                                yield ('NARROW1RIGHT', i+1, lbl(a)), result, C_NAR
+                        if isBegin(a):
+                            if ('NARROW1LEFT', i) not in prevStructEdits and ('WIDEN1LEFT', i+1) not in prevStructEdits:
+                                result = from_tags[:]
+                                result[i] = toOutside(result[i])
+                                result[i+1] = toBegin(result[i+1])
+                                yield ('NARROW1LEFT', i, lbl(a)), result, C_NAR
 
 def firstint(x):
     if isinstance(x,int): return x
@@ -306,8 +339,20 @@ def firstint(x):
 
 def best_script(in_tags, out_tags):
     '''
-    Find a minimum-cost edit script that transforms 'in_tags' (the source) into 'out_tags' 
-    (the target) via the edit operations defined in legal_edits().
+    Find a minimum-cost edit script (subject to constraints) that transforms 
+    'in_tags' (the source) into 'out_tags' (the target) via the edit operations defined 
+    in legal_edits().
+    
+    This function runs A* search subject to the described constraints on search moves. 
+    The A* heuristic is explained in the code. There is also a tiebreaker heuristic 
+    (for candidates with equal A* estimates) that prefers candidates whose output 
+    has more tags in common with the target tagging. For the Torture Test examples below, 
+    we find that the A* heuristic and the tiebreaker heuristic reduce runtime considerably.
+    
+    Edit scripts (derivations) imply alignments between chunks in the source 
+    that are not DELETEd, and chunks in the target that are not INSERTed.
+    
+    (TODO: Write a function to extract alignments from a script)
     
     >>> LABELS |= set(['PER', 'ORG', 'LOC', 'evt'])
     >>> best_script(['O'], ['O'])
@@ -330,13 +375,21 @@ def best_script(in_tags, out_tags):
     (2.0, [(('DELETE', (2,), 'PER'), ['O', 'O', 'O', 'O', 'O'])])
     >>> best_script(['O', 'O', 'B-PER', 'I-PER', 'O', 'O'], ['O']*6)
     (2.0, [(('DELETE', (2, 3), 'PER'), ['O', 'O', 'O', 'O', 'O', 'O'])])
+    >>> best_script(['B-PER', 'I-PER', 'I-PER', 'B-PER'], ['B-PER', 'I-PER', 'B-LOC', 'I-LOC'])
+    (3.0, [(('NARROW1RIGHT', 2, 'PER'), ['B-PER', 'I-PER', 'O', 'B-PER']), 
+    (('WIDEN1LEFT', 3, 'PER'), ['B-PER', 'I-PER', 'B-PER', 'I-PER']), 
+    (('RELABEL', (2, 3), 'PER', 'LOC'), ['B-PER', 'I-PER', 'B-LOC', 'I-LOC'])])
+    
+    
+    Constraints on MERGE and SPLIT
+    ==============================
     
     Adjacent chunks can usually be MERGEd, so long as their labels match:
     
     >>> best_script(['O', 'O', 'B-PER', 'B-PER', 'O', 'O'], ['O', 'O', 'B-PER', 'I-PER', 'O', 'O'])
     (1.0, [(('MERGE', 3, 'PER'), ['O', 'O', 'B-PER', 'I-PER', 'O', 'O'])])
     >>> best_script(['O', 'O', 'B-PER', 'B-LOC', 'O', 'O'], ['O', 'O', 'B-PER', 'I-PER', 'O', 'O'])
-    (3.0, [(('DELETE', (3,), 'LOC'), ['O', 'O', 'B-PER', 'O', 'O', 'O']), (('WIDEN1RIGHT', 2, 'PER'), ['O', 'O', 'B-PER', 'I-PER', 'O', 'O'])])
+    (2.0, [(('RELABEL', (3,), 'LOC', 'PER'), ['O', 'O', 'B-PER', 'B-PER', 'O', 'O']), (('MERGE', 3, 'PER'), ['O', 'O', 'B-PER', 'I-PER', 'O', 'O'])])
 
     But MERGE is not allowed if there is no overlapping chunk on the target side.
     In some cases, this prevents cheaper MERGE, then DELETE solutions. 
@@ -357,51 +410,45 @@ def best_script(in_tags, out_tags):
     
     (Otherwise the above would be INSERT, followed by SPLIT, for a cost of 3.0.)
     
-    Edit scripts (derivations) imply alignments between chunks in the source 
-    that are not DELETEd, and chunks in the target that are not INSERTed.
-    A complication that can arise when MERGEs and SPLITs are used in combination
-    is that multiple lowest-cost solutions can give different alignments:
     
-    >>> best_script(['B-PER', 'I-PER', 'I-PER', 'B-PER'], ['B-PER', 'I-PER', 'B-LOC', 'I-LOC'])    \
-    # multiple lowest-cost solutions, resulting in different alignments. \
-    # the minimize-ante-split-merges tiebreaking strategy helps avoid crossing alignments.
-    (3.0, [(('NARROW1RIGHT', 2, 'PER'), ['B-PER', 'I-PER', 'O', 'B-PER']), 
-    (('WIDEN1LEFT', 3, 'PER'), ['B-PER', 'I-PER', 'B-PER', 'I-PER']), 
-    (('RELABEL', (2, 3), 'PER', 'LOC'), ['B-PER', 'I-PER', 'B-LOC', 'I-LOC'])])
+    Constraining Search Sequences
+    =============================
     
-    This derivation is preferred over another with equal cost, 
-    which first MERGEs everything into a single chunk and then splits it in half, 
-    because the latter would mean that all of the final chunks are aligned 
-    to all of the original chunks (so there will be crossing alignments). 
-    To prefer the derivation with the better alignment, we use a heuristic tiebreaker 
-    between equal (heuristic-)cost search steps: the tiebreaker is to choose the script
-    having the fewest MERGE edits atecedent to some SPLIT edit.
+    For more complicated examples (see Torture Tests below), we need to be careful about 
+    the search space--otherwise search becomes extremely slow. One tactic we use is 
+    to reduce some of the spurious ambiguity in the ordering of edits: 
+    (a) many edits affect nonoverlapping regions and thus do not interact, so we require them 
+    to be basically left-to-right; and (b) orders of certain kinds edit operations can
+    be eliminated as unnecessary without eliminating a preferred solution. We require 
+    edits to proceed in 7 stages:
     
-    The complicated examples below show that we need to be careful about the search space;
-    otherwise search becomes extremely slow. Tactics include:
+    {DELETE}* → {NARROW}* → {WIDEN}* → {SPLIT, RELABEL}* → {MERGE, RELABEL}* → {NARROW at any SPLIT points}* → {INSERT}*
     
-    a. Only consider RELABEL operations at the end, after the structure matches.
-       And only consider the label seen in the target--so these operations are trivial. 
-       (TODO: Reconsider, because it will sometimes cause extra ops: 
-       B-PER I-PER I-PER → B-LOC B-LOC I-LOC; B-PER B-LOC I-LOC → B-PER I-PER I-PER. 
-       Maybe allow just SPLIT/MERGE after RELABEL?)
-    b. Ensure edits are roughly left-to-right: block edits that are way earlier in the 
-       sequence than the previous edit. (Specifically, the first token position 
-       in the edit should not be more than 2 tokens to the left of 
-       the first token position in the previous edit in the script. TODO: be more specific than "in the edit".
-       Implemented separately for RELABEL operations in light of (a). See `prevEditI` in the code.)
-       This eliminates some spurious ambiguity in the order of derivations.
-    c. Don't consider edits that are identical to a previous edit in the script.
-    d. With WIDEN/NARROW, don't consider edits that reverse a previous edit in the script: 
+    This, for instance, eliminates the possibility of WIDEN before NARROW 
+    (which is never required, but NARROW is sometimes required to create the necessary 
+    preconditions for WIDEN). It also eliminates a couple of lowest-cost edit sequences 
+    on the grounds that they are unintuitive. For two adjacent chunks with the same label, 
+    MERGE followed by DELETE will be lower cost than two DELETEs, but it gives a misleading 
+    impression about the number of source-side chunks that are not at all represented 
+    on the target side.
+    
+    To ensure edits are roughly left-to-right: within each stage, we do not consider edits 
+    that are way earlier in the sequence than the previous edit. (Specifically, 
+    the first token position in the edit should not be more than 2 tokens to the left of 
+    the first token position in the previous edit in the script. TODO: be more specific.
+    See `prevEditI` in the code.)
+    
+    We also avoid searching over redundant edits:
+     - Edits that are identical to a previous edit in the script are not considered.
+     - With WIDEN/NARROW, edits that reverse a previous edit in the script are not considered: 
        e.g., WIDEN1RIGHT @ 5, and later NARROW1RIGHT @ 6 (or vice versa).
     
-    TODO: Maybe edits can be constrained to an ordering respecting
-       {DELETE}* → {WIDEN, NARROW}* → {SPLIT, MERGE, RELABEL}* → {NARROW at any SPLIT points}* → {INSERT}*
-    or
-       {DELETE}* → {WIDEN, NARROW}* → {SPLIT, RELABEL}* → {MERGE, RELABEL}* → {NARROW at any SPLIT points}* → {INSERT}*
-    without ever adversely affecting the preferred derivation?
+    
+    Justification for the 7-Stage Ordering
+    ======================================
     
     Rationale for NARROW < WIDEN: B-PER I-PER B-LOC → B-PER B-LOC I-LOC
+    (But WIDEN < NARROW is never necessary, absent an intervening SPLIT?)
     
     Rationale for WIDEN < MERGE: B-PER O B-PER → B-PER I-PER I-PER
     Rationale for SPLIT < NARROW: B-PER I-PER I-PER → B-PER O B-PER
@@ -415,53 +462,68 @@ def best_script(in_tags, out_tags):
     Rationale for SPLIT < {MERGE,RELABEL}: B-PER B-PER I-PER I-PER → B-PER I-PER I-PER B-LOC without causing everything to align to everything
     Rationale for {SPLIT,RELABEL} < MERGE: B-PER I-PER I-PER B-LOC → B-PER B-PER I-PER I-PER without causing everything to align to everything
     
-    Rationale for MERGE < RELABEL < SPLIT: B-PER B-PER I-PER B-PER → B-LOC I-LOC B-LOC I-LOC 
-        (MRG > MRG > REL > SPL; everything will be aligned to everything. Alternative 
-         SPL > MRG > MRG > REL > REL gives better alignments but costs more)
+    MERGE < RELABEL < SPLIT sometimes produces a lower cost than placing SPLITs before 
+    merges, but this has the disadvantage of imprecise alignments (all token positions 
+    involved in the MERGE will be aligned). An example is 
+      B-PER B-PER I-PER B-PER → B-LOC I-LOC B-LOC I-LOC 
+    (MERGE → MERGE → RELABEL → SPLIT: everything will be aligned to everything; we prefer
+    SPLIT → MERGE → MERGE → RELABEL → RELABEL, which gives better alignments but costs more):
+    
+    >>> best_script(['B-PER', 'B-PER', 'I-PER', 'B-PER'], ['B-LOC', 'I-LOC', 'B-LOC', 'I-LOC'])
+    (5.0, [(('NARROW1LEFT', 1, 'PER'), ['B-PER', 'O', 'B-PER', 'B-PER']), 
+    (('WIDEN1RIGHT', 0, 'PER'), ['B-PER', 'I-PER', 'B-PER', 'B-PER']), 
+    (('RELABEL', (0, 1), 'PER', 'LOC'), ['B-LOC', 'I-LOC', 'B-PER', 'B-PER']), 
+    (('MERGE', 3, 'PER'), ['B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
+    (('RELABEL', (2, 3), 'PER', 'LOC'), ['B-LOC', 'I-LOC', 'B-LOC', 'I-LOC'])])
+    
+    
+    Torture Tests
+    =============
     
     >>> best_script( \
     ['O',     'B-evt', 'o', 'b-PER', 'I-evt', 'I-evt', 'B-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'O',     'O',     'O'], \
     ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'B-ORG', 'B-evt', 'b-MIS', 'I-evt'])
-    (8.0, [(('WIDEN1LEFT', 1, 'evt'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'I-evt', 'B-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'O', 'O', 'O']), 
-    (('NARROW1RIGHT', 5, 'evt'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'O', 'B-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'O', 'O', 'O']), 
+    (8.0, [(('NARROW1RIGHT', 5, 'evt'), ['O', 'B-evt', 'o', 'b-PER', 'I-evt', 'O', 'B-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'O', 'O', 'O']), 
+    (('WIDEN1LEFT', 1, 'evt'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'O', 'B-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'O', 'O', 'O']),
     (('WIDEN1LEFT', 6, 'PER'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'O', 'O', 'O']), 
-    (('INSERT', (11, 13), 'evt'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'B-evt', 'o', 'I-evt']), 
-    (('INSERT', (12,), 'MIS'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-ORG', 'I-ORG', 'B-ORG', 'B-evt', 'b-MIS', 'I-evt']), 
-    (('RELABEL', (8, 9), 'ORG', 'LOC'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'B-ORG', 'B-evt', 'b-MIS', 'I-evt'])])
+    (('RELABEL', (8, 9), 'ORG', 'LOC'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'B-ORG', 'O', 'O', 'O']), 
+    (('INSERT', (11, 13), 'evt'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'B-ORG', 'B-evt', 'o', 'I-evt']), 
+    (('INSERT', (12,), 'MIS'), ['B-evt', 'I-evt', 'o', 'b-PER', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'B-ORG', 'B-evt', 'b-MIS', 'I-evt'])])
     >>> best_script( \
     ['O',     'B-evt', 'O',     'B-PER', 'B-evt', 'I-evt', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER'], \
     ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O',     'B-PER', 'I-PER', 'B-ORG', 'I-ORG', 'I-ORG'])
-    (9.0, [(('DELETE', (4, 5), 'evt'), ['O', 'B-evt', 'O', 'B-PER', 'O', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
-    (('WIDEN1LEFT', 3, 'PER'), ['O', 'B-evt', 'B-PER', 'I-PER', 'O', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
-    (('WIDEN1LEFT', 1, 'evt'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
-    (('NARROW1RIGHT', 7, 'LOC'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'O', 'B-LOC', 'O', 'B-PER', 'I-PER']), 
-    (('WIDEN1LEFT', 6, 'LOC'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'O', 'B-PER', 'I-PER']), 
-    (('WIDEN1LEFT', 8, 'PER'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER', 'I-PER']), 
-    (('RELABEL', (5, 6), 'LOC', 'PER'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-PER', 'I-PER', 'I-PER']),
-    (('RELABEL', (7, 8, 9), 'PER', 'ORG'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-ORG', 'I-ORG', 'I-ORG'])])
+    (9.0, [(('NARROW1LEFT', 4, 'evt'), ['O', 'B-evt', 'O', 'B-PER', 'O', 'B-evt', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
+    (('NARROW1LEFT', 6, 'LOC'), ['O', 'B-evt', 'O', 'B-PER', 'O', 'B-evt', 'O', 'B-LOC', 'B-PER', 'I-PER']), 
+    (('WIDEN1LEFT', 1, 'evt'), ['B-evt', 'I-evt', 'O', 'B-PER', 'O', 'B-evt', 'O', 'B-LOC', 'B-PER', 'I-PER']), 
+    (('WIDEN1LEFT', 3, 'PER'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-evt', 'O', 'B-LOC', 'B-PER', 'I-PER']), 
+    (('WIDEN1RIGHT', 5, 'evt'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-evt', 'I-evt', 'B-LOC', 'B-PER', 'I-PER']), 
+    (('RELABEL', (5, 6), 'evt', 'PER'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-LOC', 'B-PER', 'I-PER']), 
+    (('RELABEL', (7,), 'LOC', 'ORG'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-ORG', 'B-PER', 'I-PER']), 
+    (('RELABEL', (8, 9), 'PER', 'ORG'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-ORG', 'B-ORG', 'I-ORG']), 
+    (('MERGE', 8, 'ORG'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-ORG', 'I-ORG', 'I-ORG'])])
     >>> best_script( \
     ['O',     'B-evt', 'o',     'b-PER', 'I-evt', 'I-evt', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER'], \
     ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O',     'B-PER', 'I-PER', 'B-ORG', 'I-ORG', 'I-ORG']) # has gap in source only
     (10.0, [(('DELETE', (1, 4, 5), 'evt'), ['O', 'O', 'O', 'B-PER', 'O', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
-    (('INSERT', (0, 1), 'evt'), ['B-evt', 'I-evt', 'O', 'B-PER', 'O', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
-    (('WIDEN1LEFT', 3, 'PER'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
-    (('NARROW1RIGHT', 7, 'LOC'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'O', 'B-LOC', 'O', 'B-PER', 'I-PER']), 
-    (('WIDEN1LEFT', 6, 'LOC'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'O', 'B-PER', 'I-PER']), 
-    (('WIDEN1LEFT', 8, 'PER'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER', 'I-PER']), 
-    (('RELABEL', (5, 6), 'LOC', 'PER'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-PER', 'I-PER', 'I-PER']),
-    (('RELABEL', (7, 8, 9), 'PER', 'ORG'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-ORG', 'I-ORG', 'I-ORG'])])
+    (('NARROW1RIGHT', 7, 'LOC'), ['O', 'O', 'O', 'B-PER', 'O', 'O', 'B-LOC', 'O', 'B-PER', 'I-PER']), 
+    (('WIDEN1LEFT', 3, 'PER'), ['O', 'O', 'B-PER', 'I-PER', 'O', 'O', 'B-LOC', 'O', 'B-PER', 'I-PER']), 
+    (('WIDEN1LEFT', 6, 'LOC'), ['O', 'O', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'O', 'B-PER', 'I-PER']), 
+    (('WIDEN1LEFT', 8, 'PER'), ['O', 'O', 'B-PER', 'I-PER', 'O', 'B-LOC', 'I-LOC', 'B-PER', 'I-PER', 'I-PER']), 
+    (('RELABEL', (5, 6), 'LOC', 'PER'), ['O', 'O', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-PER', 'I-PER', 'I-PER']), 
+    (('RELABEL', (7, 8, 9), 'PER', 'ORG'), ['O', 'O', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-ORG', 'I-ORG', 'I-ORG']), 
+    (('INSERT', (0, 1), 'evt'), ['B-evt', 'I-evt', 'B-PER', 'I-PER', 'O', 'B-PER', 'I-PER', 'B-ORG', 'I-ORG', 'I-ORG'])])
     '''
     assert isValidTagging(in_tags)
     assert isValidTagging(out_tags)
     assert len(in_tags)==len(out_tags),'This formulation of edits is over tags, so it requires sequences of equal length'
     
     q = []  # priority queue, accessed by heapq.heappush(heap, cost) heapq.heappop(q)
-    heapq.heappush(q, ((0.0, 0, 0, 0.0), [(None, list(in_tags))])) # edit script encoding only the initial state
+    heapq.heappush(q, ((0.0, 0, 0.0), [(None, list(in_tags))])) # edit script encoding only the initial state
 
     best_script = best_script_cost = None
 
     while q:
-        (hcost,anteSplitMerges,dcost,cost),script = heapq.heappop(q) # sequence of (edit, result) pairs. script[-1][1] is the tag sequence after all edits in the script
+        (hcost,dcost,cost),script = heapq.heappop(q) # sequence of (edit, result) pairs. script[-1][1] is the tag sequence after all edits in the script
         if len(script)>1:
             prevEdits = zip(*(script[1:]))[0]
             prevEditI = firstint(prevEdits[-1][1])
@@ -474,10 +536,10 @@ def best_script(in_tags, out_tags):
             best_script_cost = cost
             break
         for edit,result,editcost in legal_edits(script, out_tags):
-            if edit in prevEdits or (prevEditI-2>firstint(edit[1]) and edit[0]!='RELABEL'):
+            if edit in prevEdits or (prevEditI-2>firstint(edit[1]) and edit[0][:3]==prevEdits[-1][0][:3]):
                 #print(edit, script, file=sys.stderr)
                 continue # don't repeat a previous edit in this script, and require edits to be mostly left-to-right
-            #print(hcost, anteSplitMerges, dcost, cost, zip(*script)[0], edit, file=sys.stderr)
+            #print(hcost, dcost, cost, zip(*script)[0], edit, file=sys.stderr)
             assert len(result)==len(in_tags)
             assert isValidTagging(result),(script,edit,result)
             #heuristic = abs(sum(1 for t in result if isBegin(t))-sum(1 for t in out_tags if isBegin(t))) # TODO: verify this is admissible!
@@ -514,13 +576,15 @@ def best_script(in_tags, out_tags):
             nUnmatched = (unmatchedSrcChunks+unmatchedTgtChunks)
             #heapq.heappush(q, ((cost+editcost+heuristic,cost+editcost), script[:]+[(edit,result)]))
             
-            # Number of MERGE edits in the script that are followed later by some SPLIT, 
-            # possibly in the current edit.
-            # (Conflates all MERGEs and all SPLITs, which is slightly hacky: 
-            # can probably do better by looking at indices)
-            anteSplitMerges = sum(1 for i,e in enumerate(prevEdits) if e[0]=='MERGE' and (edit[0]=='SPLIT' or any(e2[0]=='SPLIT' for e2 in prevEdits[i+1:])))
+            '''
+            Number of MERGE edits in the script that are followed later by some SPLIT, 
+            possibly in the current edit.
+            (Conflates all MERGEs and all SPLITs, which is slightly hacky: 
+            can probably do better by looking at indices)
+            '''
+            #anteSplitMerges = sum(1 for i,e in enumerate(prevEdits) if e[0]=='MERGE' and (edit[0]=='SPLIT' or any(e2[0]=='SPLIT' for e2 in prevEdits[i+1:])))
             
-            heapq.heappush(q, ((cost+editcost+heuristic,anteSplitMerges,nUnmatched,cost+editcost), script[:]+[(edit,result)]))
+            heapq.heappush(q, ((cost+editcost+heuristic,nUnmatched,cost+editcost), script[:]+[(edit,result)]))
             
     return best_script_cost, best_script[1:]    # don't include the initial state in the returned script
 
