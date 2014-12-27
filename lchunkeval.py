@@ -466,15 +466,17 @@ def best_script(in_tags, out_tags):
     merges, but this has the disadvantage of imprecise alignments (all token positions 
     involved in the MERGE will be aligned). An example is 
       B-PER B-PER I-PER B-PER → B-LOC I-LOC B-LOC I-LOC 
-    (MERGE → MERGE → RELABEL → SPLIT: everything will be aligned to everything; we prefer
-    SPLIT → MERGE → MERGE → RELABEL → RELABEL, which gives better alignments but costs more):
-    
+    The derivation MERGE → MERGE → RELABEL → SPLIT would result in everything being aligned 
+    to everything; we prefer a solution that gives better alignments but costs more, like
+
     >>> best_script(['B-PER', 'B-PER', 'I-PER', 'B-PER'], ['B-LOC', 'I-LOC', 'B-LOC', 'I-LOC'])
     (5.0, [(('NARROW1LEFT', 1, 'PER'), ['B-PER', 'O', 'B-PER', 'B-PER']), 
     (('WIDEN1RIGHT', 0, 'PER'), ['B-PER', 'I-PER', 'B-PER', 'B-PER']), 
     (('RELABEL', (0, 1), 'PER', 'LOC'), ['B-LOC', 'I-LOC', 'B-PER', 'B-PER']), 
     (('MERGE', 3, 'PER'), ['B-LOC', 'I-LOC', 'B-PER', 'I-PER']), 
     (('RELABEL', (2, 3), 'PER', 'LOC'), ['B-LOC', 'I-LOC', 'B-LOC', 'I-LOC'])])
+    
+    (SPLIT → MERGE → MERGE → RELABEL → RELABEL also has cost 5.0.)
     
     
     Torture Tests
