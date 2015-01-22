@@ -298,28 +298,7 @@ def ced(s, t, debug=False):
                             chart[i,j,r,'ALI','ALI'] = x + SNARROWR((s[i].end,r), s[i].end - r) + TNARROWR((t[j].end,r), t[j].end - r)
                 else:
                     assert k==0
-                ''' # old code
-                chart0[i,j,s[i].end,'SPL','ALI'] = prev_cost + left_boundary # instead of adjusting right boundary, allow for split point
-                chart0[i,j,t[j].end,'ALI','SPL'] = prev_cost + left_boundary # instead of adjusting right boundary, allow for split point
-                right_boundary = SNARROWR((s[i].end,r), s[i].end - r) if s[i].end>r else TNARROWR((t[j].end,r), t[j].end - r)
-                centry = (i,j,r,'ALI','ALI')
-                chart0[centry] = prev_cost + left_boundary + right_boundary
-                for split_point in range(max_left, r): # TODO: double-check range
-                    mid_boundaryS = SWIDENL((s[i].start,split_point), s[i].start - split_point)
-                    mid_boundaryT = TWIDENL((t[j].start,split_point), t[j].start - split_point)
-                    for I,J in b[:k]:
-                        if J==j:
-                            x = TSPLIT(split_point) + mid_boundaryS + right_boundary + chart0[I,J,split_point,{'ALI','SPL'},'ALI'] + clearSBetween(I+1,i)
-                            if i==1 and j==0 and r==3:
-                                print('~',x)
-                                print('~.',chart0[I,J,split_point,{'ALI','SPL'},'ALI'])
-                            chart0[centry] = x
-                        if I==i:
-                            x = SSPLIT(split_point) + mid_boundaryT + right_boundary + chart0[I,J,split_point,'ALI',{'ALI','SPL'}] + clearTBetween(J+1,i)
-                            if i==1 and j==0 and r==3:
-                                print('~~',x)
-                            chart0[centry] = x
-                '''
+                
             #print(chart0)
             #chart[i,j,min_right,'ALI','ALI'] = chart0[i,j,min_right,'ALI','ALI']
     
