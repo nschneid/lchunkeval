@@ -442,6 +442,30 @@ def ced(s, t, debug=False):
     >>> t = [Span(0,3,'_')]
     >>> ced(s,t)
     (5, ('SRELABEL', (0, '=', '_'), 'SRELABEL', (1, '~', '_'), 'TSPLIT', 1, 'SRELABEL', (2, '~', '_'), 'TSPLIT', 2))
+    
+    #    0= 1~  source chunking
+    # 0_______  target chunking
+    #0  1  2  3 word indices
+    >>> s = [Span(1,2,'='),Span(2,3,'~')]
+    >>> t = [Span(0,3,'_')]
+    >>> ced(s,t)
+    (4, ('TNARROWL', (0, 1), 'SRELABEL', (0, '=', '_'), 'SRELABEL', (1, '~', '_'), 'TSPLIT', 2))
+    
+    #    0= 1=  source chunking
+    # 0_______  target chunking
+    #0  1  2  3 word indices
+    >>> s = [Span(1,2,'='),Span(2,3,'=')]
+    >>> t = [Span(0,3,'_')]
+    >>> ced(s,t)
+    (3, ('TNARROWL', (0, 1), 'TRELABEL', (0, '_', '='), 'TSPLIT', 2))
+    
+    #    0= 1_  source chunking
+    # 0_______  target chunking
+    #0  1  2  3 word indices
+    >>> s = [Span(1,2,'='),Span(2,3,'_')]
+    >>> t = [Span(0,3,'_')]
+    >>> ced(s,t)
+    (3, ('TNARROWL', (0, 1), 'SRELABEL', (0, '=', '_'), 'TSPLIT', 2))
     '''
     solution = Value()
     derivation = []
@@ -514,15 +538,14 @@ def ced(s, t, debug=False):
                     relabel_cost = a.RELABEL_BOTH(lbl)
                     if a.chunk(oside).end <= a.chunk(side).end:
                         a[a.chunk(oside).end,'ALI','SPL',lbl] = prev_cost + left_boundary + relabel_cost
-                    a[min_right,'ALI','ALI',lbl] = prev_cost + left_boundary + right_boundary \
-                        + relabel_cost
+                    a[min_right,'ALI','ALI',lbl] = prev_cost + left_boundary + right_boundary + relabel_cost
             
                     #for plbl in bLabels:
                     if True:
                         # split
                         for p in a.allPrevAlignsForChunk(side):
-                            # SSPLIT: [    A @i    ] / [B @J<j] ... [C @j]
-                            x = p[p.chunk(oside).end,'ALI',{'SPL','ALI'},lbl]    # ...[ B ]
+                            # SPLIT side / oside: [    A @i    ] / [B @J<j] ... [C @j]
+                            x = p[p.chunk(oside).end,'ALI',{'SPL','ALI'},lbl]    # ...[ A ] / ...[ B ]
                                    #+ p.RELABEL(oside, plbl, lbl) \
                             x      += a.RELABEL(oside, a.chunk(oside).label, lbl) # [ C ]
                             x      += a.WIDENL(oside, p.chunk(oside).end) \
