@@ -99,6 +99,7 @@ class Span(object):
         s = 'Span({}, {})'.format(self.start, self.end)
         if self.label:
             s = s[:-1] + ', ' + repr(self.label) + ')'
+        return s
     
 # edit costs
 
@@ -152,9 +153,13 @@ class Alignment(object):
         self.tChunk = tChunk
         self.j = tChunkI    # offset in list of target chunks
         self.prevAlign = prevAlign
+        self.nextAlign = None
         if self.prevAlign:
             self.prevAlign.nextAlign = self
         self._side = None
+    
+    def __repr__(self):
+        return '<' + repr(self.sChunk) + ' / ' + repr(self.tChunk) + '>'
     
     def __getitem__(self, (r, status1, status2, lbl)):
         if self.side=='s':
@@ -188,6 +193,7 @@ class Alignment(object):
         assert side in {'s','t'}
         if self.prevAlign:
             if self.prevAlign.chunk(side) is self.chunk(side):
+                self.prevAlign.side = side # ensure chart indexing is in the correct direction
                 return self.prevAlign
     
     def allPrevAlignsForChunk(self, side):
@@ -200,8 +206,41 @@ class Alignment(object):
         assert side in {'s','t'}
         if self.nextAlign:
             if self.nextAlign.chunk(side) is self.chunk(side):
+                self.nextAlign.side = side # ensure chart indexing is in the correct direction
                 return self.nextAlign
         return None
+    
+    def allNextAlignsForChunk(self, side):
+        n = self.nextAlignForChunk(side)
+        if not n:
+            return []
+        return n.allNextAlignsForChunk(side)+[n]
+    
+    def possibleLabelsForChunk(self, side):
+        '''Labels seen for the chunk or one of its potentially aligned chunks
+        
+        >>> s = [Span(0,1,'='), Span(1,2,'~'), Span(2,3,'~')]
+        >>> t = [Span(0,3,'_')]
+        >>> aa = [Alignment(0, s[0], 0, t[0])]
+        >>> aa.append(Alignment(1, s[1], 0, t[0], aa[-1]))
+        >>> aa.append(Alignment(2, s[2], 0, t[0], aa[-1]))
+        >>> aa
+        [<Span(0, 1, '=') / Span(0, 3, '_')>, <Span(1, 2, '~') / Span(0, 3, '_')>, <Span(2, 3, '~') / Span(0, 3, '_')>]
+        >>> sorted(aa[0].possibleLabelsForChunk('s'))
+        ['=', '_']
+        >>> sorted(aa[0].possibleLabelsForChunk('t'))
+        ['=', '_', '~']
+        >>> aa[0].possibleLabelsForChunk('t')==aa[1].possibleLabelsForChunk('t')==aa[2].possibleLabelsForChunk('t')
+        True
+        >>> sorted(aa[1].possibleLabelsForChunk('s'))
+        ['_', '~']
+        >>> aa[1].possibleLabelsForChunk('s')==aa[2].possibleLabelsForChunk('s')
+        True
+        '''
+        oside = 't' if side=='s' else 's'
+        return {self.chunk(side).label, self.chunk(oside).label} \
+            | {a.chunk(oside).label for a in self.allPrevAlignsForChunk(side)} \
+            | {a.chunk(oside).label for a in self.allNextAlignsForChunk(side)}
     
     def DELETE(self, side=None):
         if side is None: side = self.side
@@ -330,7 +369,7 @@ def ced(s, t, debug=False):
     >>> t = [Span(0,4,'='),Span(4,6,'_')]
     >>> ced(s,t)
     (6, ('SRELABEL', (0, '_', '='), 'TSPLIT', 1, 'TNARROWR', (4, 3), 'SNARROWL', (3, 4), 
-        'TSPLIT', 5, 'SRELABEL', (3, '=', '_')))
+        'SRELABEL', (3, '=', '_'), 'TSPLIT', 5))
         
     # 0= 1_ 2~ 3= 4~ 5=  source chunking
     # 0________________  target chunking
@@ -338,9 +377,7 @@ def ced(s, t, debug=False):
     >>> s = [Span(0,1,'='),Span(1,2,'_'),Span(2,3,'~'),Span(3,4,'='),Span(4,5,'~'),Span(5,6,'=')]
     >>> t = [Span(0,6,'_')]
     >>> ced(s,t)
-    (9, ('SRELABEL', (0, '=', '_'), 'TSPLIT', 1, 'TSPLIT', 2, 
-        'SRELABEL', (2, '~', '_'), 'TSPLIT', 3, 'SRELABEL', (3, '=', '~'), 'TSPLIT', 4, 
-        'SRELABEL', (4, '~', '='), 'TSPLIT', 5))
+    (10, ('SRELABEL', (0, '=', '_'), 'TSPLIT', 1, 'SRELABEL', (2, '~', '_'), 'TSPLIT', 2, 'SRELABEL', (3, '=', '_'), 'TSPLIT', 3, 'SRELABEL', (4, '~', '_'), 'TSPLIT', 4, 'SRELABEL', (5, '=', '_'), 'TSPLIT', 5))
     
     # 0= 1_ 2_ 3~ 4_ 5_ 6=  source chunking
     # 0___________________  target chunking
@@ -348,7 +385,7 @@ def ced(s, t, debug=False):
     >>> s = [Span(0,1,'='),Span(1,2,'_'),Span(2,3,'_'),Span(3,4,'~'),Span(4,5,'_'),Span(5,6,'_'),Span(6,7,'=')]
     >>> t = [Span(0,7,'_')]
     >>> ced(s,t)
-    9
+    (9, ('SRELABEL', (0, '=', '_'), 'TSPLIT', 1, 'TSPLIT', 2, 'SRELABEL', (3, '~', '_'), 'TSPLIT', 3, 'TSPLIT', 4, 'TSPLIT', 5, 'SRELABEL', (6, '=', '_'), 'TSPLIT', 6))
     
     # 0=     source chunking
     # 0____  target chunking
@@ -372,15 +409,39 @@ def ced(s, t, debug=False):
     >>> s = [Span(0,1,'='),Span(1,2,'=')]
     >>> t = [Span(0,2,'_')]
     >>> ced(s,t)
+    (2, ('TRELABEL', (0, '_', '='), 'TSPLIT', 1))
+    
+    # 0_ 1=  source chunking
+    # 0____  target chunking
+    #0  1  2 word indices
+    >>> s = [Span(0,1,'_'),Span(1,2,'=')]
+    >>> t = [Span(0,2,'_')]
+    >>> ced(s,t)
+    (2, ('SRELABEL', (1, '=', '_'), 'TSPLIT', 1))
+    
+    # 0= 1_  source chunking
+    # 0____  target chunking
+    #0  1  2 word indices
+    >>> s = [Span(0,1,'='),Span(1,2,'_')]
+    >>> t = [Span(0,2,'_')]
+    >>> ced(s,t)
     (2, ('SRELABEL', (0, '=', '_'), 'TSPLIT', 1))
     
-    # 0= 1_ 2= source chunking
+    # 0= 1_ 2=  source chunking
     # 0_______  target chunking
-    #0  1  2 word indices
-    >>> s = [Span(0,1,'='),Span(1,2,'_'),Span(2,3,'_'),Span(3,4,'=')]
-    >>> t = [Span(0,4,'_')]
-    >>> ced(s,t,debug=True)
-    5
+    #0  1  2  3 word indices
+    >>> s = [Span(0,1,'='),Span(1,2,'_'),Span(2,3,'=')]
+    >>> t = [Span(0,3,'_')]
+    >>> ced(s,t)
+    (4, ('SRELABEL', (0, '=', '_'), 'TSPLIT', 1, 'SRELABEL', (2, '=', '_'), 'TSPLIT', 2))
+    
+    # 0= 1~ 2~  source chunking
+    # 0_______  target chunking
+    #0  1  2  3 word indices
+    >>> s = [Span(0,1,'='),Span(1,2,'~'),Span(2,3,'~')]
+    >>> t = [Span(0,3,'_')]
+    >>> ced(s,t)
+    (5, ('SRELABEL', (0, '=', '_'), 'SRELABEL', (1, '~', '_'), 'TSPLIT', 1, 'SRELABEL', (2, '~', '_'), 'TSPLIT', 2))
     '''
     solution = Value()
     derivation = []
@@ -405,6 +466,8 @@ def ced(s, t, debug=False):
         # indexing the chart: source_chunk, target_chunk, right_boundary, source_status, target_status, ending_label
         
         Alignment.chart = Chart()   # new chart for each block
+        
+        if debug: print(aa)
         
         for k,a in enumerate(aa):
         
@@ -447,27 +510,32 @@ def ced(s, t, debug=False):
                     prev_cost = Value(float('inf'),())
                 
                 # align and leave open for being the left part of a split, with the original right boundary
-                for lbl in bLabels:
+                for lbl in a.possibleLabelsForChunk(oside):
                     relabel_cost = a.RELABEL_BOTH(lbl)
                     if a.chunk(oside).end <= a.chunk(side).end:
                         a[a.chunk(oside).end,'ALI','SPL',lbl] = prev_cost + left_boundary + relabel_cost
                     a[min_right,'ALI','ALI',lbl] = prev_cost + left_boundary + right_boundary \
                         + relabel_cost
             
-                    for plbl in bLabels:
+                    #for plbl in bLabels:
+                    if True:
                         # split
                         for p in a.allPrevAlignsForChunk(side):
-                            # SSPLIT: [    i    ] / [J<j] ... [j]
-                            x = p[p.chunk(oside).end,'ALI',{'SPL','ALI'},plbl] \
-                                    + a.RELABEL(oside, plbl, lbl) \
-                                    + a.WIDENL(oside, p.chunk(oside).end) \
+                            # SSPLIT: [    A @i    ] / [B @J<j] ... [C @j]
+                            x = p[p.chunk(oside).end,'ALI',{'SPL','ALI'},lbl]    # ...[ B ]
+                                   #+ p.RELABEL(oside, plbl, lbl) \
+                            x      += a.RELABEL(oside, a.chunk(oside).label, lbl) # [ C ]
+                            x      += a.WIDENL(oside, p.chunk(oside).end) \
                                     + a.CLEAR_FROM(p) \
-                                    + a.SPLIT()
+                                    + a.SPLIT()    # B]...[C
                             
-                            chk = a.chunk(side)
-                            if chk.end < a.chunk(oside).end:
-                                a[min_right,'SPL','ALI',lbl] = x + a.RELABEL(side, chk.label, lbl)    # relabel source, then split
-                                a[min_right,'SPL','ALI',chk.label] = x + a.RELABEL(side, chk.label, lbl) # split source, then relabel left side
+                            chk = a.chunk(side) # A
+                            if chk.end < a.chunk(oside).end:    # A] . / . C]
+                                a[min_right,'SPL','ALI',lbl] = x
+                                #a[min_right,'SPL','ALI',lbl] = x + a.RELABEL(side, chk.label, lbl)    # relabel source, then split
+                                #a[min_right,'SPL','ALI',chk.label] = x + a.RELABEL(side, chk.label, lbl) # split source, then relabel left side
+                            elif a.chunk(oside).end < chk.end:
+                                a[min_right,'ALI','SPL',lbl] = x
                             a[min_right,'ALI','ALI',lbl] = x + a.NARROWR()
         
         # a is leftover from the end of the loop
