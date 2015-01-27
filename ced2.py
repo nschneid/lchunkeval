@@ -359,7 +359,7 @@ def ced(s, t, debug=False):
     >>> t = [Span(0,3,'='),Span(5,6,'_'),Span(8,9,'='),Span(11,12,'_'),Span(12,14,'_')]
     >>> ced(s,t)
     (13, ('TNARROWL', (0, 1), 'TRELABEL', (0, '=', '_'), 'TSPLIT', 2, 'SNARROWR', (4, 3), 
-        'SDELETE', 2, 'SRELABEL', (3, '=', '_'), 'TRELABEL', (2, '=', '_'), 
+        'SDELETE', 2, 'TRELABEL', (1, '_', '='), 'TRELABEL', (2, '=', '_'), 
         'TWIDENL', (11, 9), 'SSPLIT', 11, 'SSPLIT', 12, 'TSPLIT', 13))
     
     # 0_ 1===== 2____ 3=   source chunking
@@ -536,30 +536,24 @@ def ced(s, t, debug=False):
                 # align and leave open for being the left part of a split, with the original right boundary
                 for lbl in a.possibleLabelsForChunk(oside):
                     relabel_cost = a.RELABEL_BOTH(lbl)
-                    if a.chunk(oside).end <= a.chunk(side).end:
+                    if a.chunk(oside).end < a.chunk(side).end:
                         a[a.chunk(oside).end,'ALI','SPL',lbl] = prev_cost + left_boundary + relabel_cost
                     a[min_right,'ALI','ALI',lbl] = prev_cost + left_boundary + right_boundary + relabel_cost
-            
-                    #for plbl in bLabels:
-                    if True:
-                        # split
-                        for p in a.allPrevAlignsForChunk(side):
-                            # SPLIT side / oside: [    A @i    ] / [B @J<j] ... [C @j]
-                            x = p[p.chunk(oside).end,'ALI',{'SPL','ALI'},lbl]    # ...[ A ] / ...[ B ]
-                                   #+ p.RELABEL(oside, plbl, lbl) \
-                            x      += a.RELABEL(oside, a.chunk(oside).label, lbl) # [ C ]
-                            x      += a.WIDENL(oside, p.chunk(oside).end) \
-                                    + a.CLEAR_FROM(p) \
-                                    + a.SPLIT()    # B]...[C
-                            
-                            chk = a.chunk(side) # A
-                            if chk.end < a.chunk(oside).end:    # A] . / . C]
-                                a[min_right,'SPL','ALI',lbl] = x
-                                #a[min_right,'SPL','ALI',lbl] = x + a.RELABEL(side, chk.label, lbl)    # relabel source, then split
-                                #a[min_right,'SPL','ALI',chk.label] = x + a.RELABEL(side, chk.label, lbl) # split source, then relabel left side
-                            elif a.chunk(oside).end < chk.end:
-                                a[min_right,'ALI','SPL',lbl] = x
-                            a[min_right,'ALI','ALI',lbl] = x + a.NARROWR()
+                    
+                    for p in a.allPrevAlignsForChunk(side):
+                        # SPLIT side / oside: [    A @i    ] / [B @J<j] ... [C @j]
+                        x = p[p.chunk(oside).end,'ALI',{'SPL','ALI'},lbl]    # ...[ A ] / ...[ B ]
+                        x      += a.RELABEL(oside, a.chunk(oside).label, lbl) # [ C ]
+                        x      += a.WIDENL(oside, p.chunk(oside).end) \
+                                + a.CLEAR_FROM(p) \
+                                + a.SPLIT()    # B]...[C
+                        
+                        chk = a.chunk(side) # A
+                        if chk.end < a.chunk(oside).end:    # A] . / . C]
+                            a[min_right,'SPL','ALI',lbl] = x
+                        elif a.chunk(oside).end < chk.end:  # TODO: why do we need both conditions here, where we don't in the non-split case?
+                            a[min_right,'ALI','SPL',lbl] = x
+                        a[min_right,'ALI','ALI',lbl] = x + a.NARROWR()
         
         # a is leftover from the end of the loop
         derivation.append(Alignment.chart.lookup((a.i, a.j, Ellipsis, {'DEL','ALI'}, {'DEL','ALI'}, Ellipsis))[0])
