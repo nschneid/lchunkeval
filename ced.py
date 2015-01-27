@@ -246,13 +246,21 @@ def ced(s, t, debug=False):
     >>> ced(s,t)
     9
     
+    # 0=     source chunking
+    # 0____  target chunking
+    #0  1  2 word indices
+    >>> s = [Span(0,1,'=')]
+    >>> t = [Span(0,2,'_')]
+    >>> ced(s,t)
+    (2, ('TNARROWR', (2, 1), 'SRELABEL', (0, '=', '_')))
+    
     # 0= 1=  source chunking
     # 0____  target chunking
     #0  1  2 word indices
     >>> s = [Span(0,1,'='),Span(1,2,'=')]
     >>> t = [Span(0,2,'_')]
-    >>> ced(s,t,debug=True)
-    2
+    >>> ced(s,t)
+    (2, ('SRELABEL', (0, '=', '_'), 'TSPLIT', 1))
     
     # 0= 1_ 2= source chunking
     # 0_______  target chunking
