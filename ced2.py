@@ -560,7 +560,7 @@ def ced(s, t, debug=False):
             
                 if a.prevAlignForChunk(oside):
                     assert k>0
-                    prev_cost = a.prevAlignForChunk(oside)[None,{'ALI','PASS'},{'ALI','DEL'},None] #+ SRELABEL((i,lbl,s[i].label),lbl,s[i].label)
+                    prev_cost = a.prevAlignForChunk(oside)[None,'PASS',{'ALI','DEL'},None] #+ SRELABEL((i,lbl,s[i].label),lbl,s[i].label)
                     if debug:
                         print('~~~~>', a.prevAlignForChunk(oside).lookup((None, 'PASS', {'ALI','DEL'}, None)))
                         print(prev_cost)
@@ -578,7 +578,7 @@ def ced(s, t, debug=False):
                     
                     for p in a.allPrevAlignsForChunk(side):
                         # SPLIT side / oside: [    A @i    ] / [B @J<j] ... [C @j]
-                        x = p[p.chunk(oside).end,'ALI',{'SPL','ALI'},lbl]    # ...[ A ] / ...[ B ]
+                        x = p[p.chunk(oside).end,'ALI','SPL',lbl]    # ...[ A ] / ...[ B ]
                         x      += a.RELABEL(oside, a.chunk(oside).label, lbl) # [ C ]
                         x      += a.WIDENL(oside, p.chunk(oside).end) \
                                 + a.CLEAR_FROM(p) \
