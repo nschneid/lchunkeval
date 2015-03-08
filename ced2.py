@@ -84,6 +84,8 @@ class Chart(dict):
             kv = self.lookup(k,op=op)
         except ValueError:
             return semi0
+        except KeyError:
+            return semi0
         return kv[1]
 
 
@@ -166,6 +168,12 @@ class Alignment(object):
             return self.chart[self.i,self.j, r, status1,status2, lbl]
         else:
             return self.chart[self.i,self.j, r, status2,status1, lbl]
+    
+    def lookup(self, (r, status1, status2, lbl)):
+        if self.side=='s':
+            return self.chart.lookup((self.i,self.j, r, status1,status2, lbl))
+        else:
+            return self.chart.lookup((self.i,self.j, r, status2,status1, lbl))
     
     def __setitem__(self, (r, status1, status2, lbl), v):
         if self.side=='s':
@@ -466,6 +474,31 @@ def ced(s, t, debug=False):
     >>> t = [Span(0,3,'_')]
     >>> ced(s,t)
     (3, ('TNARROWL', (0, 1), 'SRELABEL', (0, '=', '_'), 'TSPLIT', 2))
+    
+    # 0==== 1_  source chunking
+    # 0= 1____  target chunking
+    #0  1  2  3 word indices
+    >>> s = [Span(0,2,'='),Span(2,3,'_')]
+    >>> t = [Span(0,1,'='),Span(1,3,'_')]
+    >>> ced(s,t)
+    (2, ('SNARROWR', (2, 1), 'TNARROWL', (1, 2)))
+    
+    # 0====    1_  source chunking
+    # 0= 1_______  target chunking
+    #0  1  2  3  4 word indices
+    >>> s = [Span(0,2,'='),Span(3,4,'_')]
+    >>> t = [Span(0,1,'='),Span(1,4,'_')]
+    >>> ced(s,t)
+    (3, ('SNARROWR', (2, 1), 'TNARROWL', (1, 3)))
+    
+    # 0________________  source chunking
+    # 0_             1_  target chunking
+    #0  1  2  3  4  5  6 word indices
+    >>> s = [Span(0,6,'_')]
+    >>> t = [Span(0,1,'_'),Span(5,6,'_')]
+    >>> ced(s,t)
+    (5, ('TWIDENL', (5, 1), 'SSPLIT', 5))
+    >>> # Would have a cost of 4 if able to SPLIT, then DELETE
     '''
     solution = Value()
     derivation = []
@@ -528,6 +561,9 @@ def ced(s, t, debug=False):
                 if a.prevAlignForChunk(oside):
                     assert k>0
                     prev_cost = a.prevAlignForChunk(oside)[None,{'ALI','PASS'},{'ALI','DEL'},None] #+ SRELABEL((i,lbl,s[i].label),lbl,s[i].label)
+                    if debug:
+                        print('~~~~>', a.prevAlignForChunk(oside).lookup((None, 'PASS', {'ALI','DEL'}, None)))
+                        print(prev_cost)
                 elif k==0:
                     prev_cost = Value()
                 else:
@@ -556,7 +592,7 @@ def ced(s, t, debug=False):
                         a[min_right,'ALI','ALI',lbl] = x + a.NARROWR()
         
         # a is leftover from the end of the loop
-        derivation.append(Alignment.chart.lookup((a.i, a.j, Ellipsis, {'DEL','ALI'}, {'DEL','ALI'}, Ellipsis))[0])
+        derivation.append(a.lookup((Ellipsis, {'DEL','ALI'}, {'DEL','ALI'}, Ellipsis))[0])
         #derivation.append(prev_cost)
         solution += a[..., {'DEL','ALI'}, {'DEL','ALI'}, ...]
         if debug:
