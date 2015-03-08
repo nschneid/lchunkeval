@@ -499,6 +499,14 @@ def ced(s, t, debug=False):
     >>> ced(s,t)
     (5, ('TWIDENL', (5, 1), 'SSPLIT', 5))
     >>> # Would have a cost of 4 if able to SPLIT, then DELETE
+    
+    # 0__________  source chunking
+    # 0_ 1____ 2_  target chunking
+    #0  1  2  3  4 word indices
+    >>> s = [Span(0,4,'_')]
+    >>> t = [Span(0,1,'_'),Span(1,3,'_'),Span(3,4,'_')]
+    >>> ced(s,t)
+    (2, ('SSPLIT', 1, 'SSPLIT', 3))
     '''
     solution = Value()
     derivation = []
